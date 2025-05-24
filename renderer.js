@@ -1,4 +1,4 @@
-// This is the RENDERER PROCESS - Now with actual recording capabilities!
+// This is the RENDERER PROCESS - Now with quality settings!
 
 console.log('🎨 Renderer process loaded!');
 
@@ -18,6 +18,40 @@ let recordedChunks = [];
 let recordingStartTime = null;
 let timerInterval = null;
 
+// Quality presets
+const QUALITY_PRESETS = {
+  low: {
+    name: 'Low (720p)',
+    width: 1280,
+    height: 720,
+    frameRate: 30,
+    bitrate: 2500000, // 2.5 Mbps
+  },
+  medium: {
+    name: 'Medium (1080p)',
+    width: 1920,
+    height: 1080,
+    frameRate: 30,
+    bitrate: 5000000, // 5 Mbps
+  },
+  high: {
+    name: 'High (1080p 60fps)',
+    width: 1920,
+    height: 1080,
+    frameRate: 60,
+    bitrate: 8000000, // 8 Mbps
+  },
+  ultra: {
+    name: 'Ultra (4K)',
+    width: 3840,
+    height: 2160,
+    frameRate: 30,
+    bitrate: 20000000, // 20 Mbps
+  },
+};
+
+let selectedQuality = 'high'; // Default quality
+
 // Get DOM elements
 const recordBtn = document.getElementById('recordBtn');
 const stopBtn = document.getElementById('stopBtn');
@@ -30,6 +64,7 @@ const previewPlaceholder = document.getElementById('previewPlaceholder');
 const recordingInfo = document.getElementById('recordingInfo');
 const recordingTimer = document.getElementById('recordingTimer');
 const saveLocation = document.getElementById('saveLocation');
+const currentQuality = document.getElementById('currentQuality');
 
 // Function to log messages with timestamp
 function log(message, type = 'info') {
@@ -39,6 +74,26 @@ function log(message, type = 'info') {
   logEntry.innerHTML = `[${timestamp}] ${icon} ${message}`;
   logArea.appendChild(logEntry);
   logArea.scrollTop = logArea.scrollHeight; // Auto-scroll to bottom
+}
+
+// Function to set recording quality
+function setQuality(quality) {
+  selectedQuality = quality;
+  const preset = QUALITY_PRESETS[quality];
+  log(`🎬 Quality changed to: ${preset.name}`);
+
+  // Update the quality display
+  if (currentQuality) {
+    currentQuality.textContent = preset.name;
+  }
+
+  // If we have an active preview, restart it with new quality
+  if (selectedSourceId && previewStream) {
+    // Stop current preview
+    previewStream.getTracks().forEach((track) => track.stop());
+    // Start new preview with updated quality
+    startPreview(selectedSourceId);
+  }
 }
 
 // Function to update recording timer
@@ -185,13 +240,23 @@ async function startPreview(sourceId) {
   try {
     log('👀 Starting preview...');
 
-    // Get user media with the selected source
+    const quality = QUALITY_PRESETS[selectedQuality];
+    log(`🎬 Using quality preset: ${quality.name}`);
+
+    // Get user media with the selected source - WITH QUALITY SETTINGS
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: false, // We'll add audio in next step
       video: {
         mandatory: {
           chromeMediaSource: 'desktop',
           chromeMediaSourceId: sourceId,
+          // Quality settings based on preset
+          minWidth: quality.width,
+          maxWidth: quality.width,
+          minHeight: quality.height,
+          maxHeight: quality.height,
+          minFrameRate: quality.frameRate,
+          maxFrameRate: quality.frameRate,
         },
       },
     });
@@ -203,6 +268,14 @@ async function startPreview(sourceId) {
     previewVideo.srcObject = stream;
     previewVideo.style.display = 'block';
     previewPlaceholder.style.display = 'none';
+
+    // Log the actual video track settings
+    const videoTrack = stream.getVideoTracks()[0];
+    const settings = videoTrack.getSettings();
+    log(
+      `📺 Video resolution: ${settings.width}x${settings.height} @ ${settings.frameRate}fps`,
+      'success'
+    );
 
     log('✅ Preview started successfully!', 'success');
   } catch (error) {
@@ -229,10 +302,34 @@ async function startRecording() {
     // Reset recorded chunks
     recordedChunks = [];
 
-    // Create MediaRecorder with the preview stream
-    mediaRecorder = new MediaRecorder(previewStream, {
-      mimeType: 'video/webm;codecs=vp9', // Good quality codec
-    });
+    // Determine best codec and bitrate based on system
+    let mimeType;
+    const codecs = [
+      'video/webm;codecs=vp9,opus', // Best quality
+      'video/webm;codecs=vp9', // Good quality
+      'video/webm;codecs=vp8,opus', // Fallback
+      'video/webm;codecs=vp8', // Basic fallback
+      'video/webm', // Last resort
+    ];
+
+    // Find the first supported codec
+    for (const codec of codecs) {
+      if (MediaRecorder.isTypeSupported(codec)) {
+        mimeType = codec;
+        log(`🎬 Using codec: ${codec}`, 'success');
+        break;
+      }
+    }
+
+    // Create MediaRecorder with quality settings
+    const quality = QUALITY_PRESETS[selectedQuality];
+    const recorderOptions = {
+      mimeType: mimeType,
+      videoBitsPerSecond: quality.bitrate,
+    };
+
+    log(`📹 Recording at ${(quality.bitrate / 1000000).toFixed(1)} Mbps`);
+    mediaRecorder = new MediaRecorder(previewStream, recorderOptions);
 
     // Handle data available event
     mediaRecorder.ondataavailable = (event) => {
@@ -253,8 +350,8 @@ async function startRecording() {
       log(`❌ Recording error: ${event.error}`, 'error');
     };
 
-    // Start recording (collect data every second)
-    mediaRecorder.start(1000);
+    // Start recording (collect data every 100ms for smoother recording)
+    mediaRecorder.start(100);
 
     // Update main process state
     const result = await window.electronAPI.startRecording(selectedSourceId);
@@ -448,6 +545,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveLocation.textContent = dirInfo.directory;
   } catch (error) {
     saveLocation.textContent = 'Unable to determine save location';
+  }
+
+  // Update quality display
+  const preset = QUALITY_PRESETS[selectedQuality];
+  if (currentQuality) {
+    currentQuality.textContent = preset.name;
   }
 
   // Check initial status

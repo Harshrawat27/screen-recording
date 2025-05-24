@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>Screen Recorder - Step 1</title>
+    <title>Screen Recorder - Step 4</title>
     <style>
       /* Updated styling with your requested color scheme */
       body {
@@ -213,6 +213,51 @@
         border-radius: 4px;
       }
 
+      .quality-selector {
+        margin: 30px 0;
+        background: rgba(255, 255, 255, 0.1);
+        padding: 25px;
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
+      }
+
+      .quality-options {
+        display: grid;
+        gap: 15px;
+        margin-top: 15px;
+      }
+
+      .quality-option {
+        display: flex;
+        align-items: center;
+        padding: 15px;
+        background: rgba(0, 0, 0, 0.3);
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+      }
+
+      .quality-option:hover {
+        background: rgba(137, 117, 234, 0.2);
+      }
+
+      .quality-option input[type='radio'] {
+        margin-right: 15px;
+        width: 20px;
+        height: 20px;
+        cursor: pointer;
+      }
+
+      .quality-option span {
+        font-size: 16px;
+        color: white;
+      }
+
+      .quality-option input[type='radio']:checked + span {
+        color: #8975ea;
+        font-weight: 600;
+      }
+
       .preview-section {
         margin: 30px 0;
         background: rgba(255, 255, 255, 0.1);
@@ -334,8 +379,7 @@
         <h2>Step 4: Basic Recording</h2>
         <p>Now we can actually record and save video files! 🎉</p>
         <p>
-          Select a source, start recording, and your files will be saved
-          automatically.
+          Select a source, choose your quality settings, and start recording!
         </p>
       </div>
 
@@ -348,6 +392,49 @@
           <div class="preview-placeholder">
             Click "Refresh Sources" to see available screens and windows
           </div>
+        </div>
+      </div>
+
+      <div class="quality-selector">
+        <h3>🎬 Recording Quality</h3>
+        <div class="quality-options">
+          <label class="quality-option">
+            <input
+              type="radio"
+              name="quality"
+              value="low"
+              onchange="setQuality('low')"
+            />
+            <span>Low (720p 30fps) - ~2.5 Mbps</span>
+          </label>
+          <label class="quality-option">
+            <input
+              type="radio"
+              name="quality"
+              value="medium"
+              onchange="setQuality('medium')"
+            />
+            <span>Medium (1080p 30fps) - ~5 Mbps</span>
+          </label>
+          <label class="quality-option">
+            <input
+              type="radio"
+              name="quality"
+              value="high"
+              checked
+              onchange="setQuality('high')"
+            />
+            <span>High (1080p 60fps) - ~8 Mbps</span>
+          </label>
+          <label class="quality-option">
+            <input
+              type="radio"
+              name="quality"
+              value="ultra"
+              onchange="setQuality('ultra')"
+            />
+            <span>Ultra (4K 30fps) - ~20 Mbps</span>
+          </label>
         </div>
       </div>
 
@@ -389,6 +476,7 @@
         </div>
         <div class="recording-details">
           <p>📂 Save location: <span id="saveLocation">Loading...</span></p>
+          <p>🎬 Quality: <span id="currentQuality">High (1080p 60fps)</span></p>
         </div>
       </div>
 

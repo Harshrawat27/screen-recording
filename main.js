@@ -1,6 +1,8 @@
 // This is the MAIN PROCESS - it runs Node.js and controls the app lifecycle
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const fs = require('fs').promises;
+const os = require('os');
 
 // Keep a global reference of the window object
 let mainWindow;
@@ -33,6 +35,39 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+}
+
+// Helper function to get recordings directory
+function getRecordingsDirectory() {
+  // Create a 'Recordings' folder in the user's Videos directory
+  const videosPath = app.getPath('videos');
+  const recordingsPath = path.join(videosPath, 'ScreenRecordings');
+  return recordingsPath;
+}
+
+// Helper function to ensure recordings directory exists
+async function ensureRecordingsDirectory() {
+  const dir = getRecordingsDirectory();
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  } catch (error) {
+    console.error('Error creating recordings directory:', error);
+    throw error;
+  }
+}
+
+// Helper function to generate unique filename
+function generateFilename() {
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  return `Recording_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.webm`;
 }
 
 // IPC HANDLERS - These respond to messages from the renderer process
@@ -116,6 +151,73 @@ ipcMain.handle('stop-recording', async () => {
 // Handle get status request
 ipcMain.handle('get-recording-status', async () => {
   return { isRecording, sourceId: global.selectedSourceId };
+});
+
+// Handle save recording request - THIS IS THE MISSING HANDLER!
+ipcMain.handle('save-recording', async (event, videoData) => {
+  console.log('💾 Main: Save recording requested');
+
+  try {
+    // Ensure recordings directory exists
+    const recordingsDir = await ensureRecordingsDirectory();
+
+    // Generate unique filename
+    const filename = generateFilename();
+    const filePath = path.join(recordingsDir, filename);
+
+    // Convert array back to Buffer
+    const buffer = Buffer.from(videoData);
+
+    console.log(`📝 Saving ${buffer.length} bytes to ${filePath}`);
+
+    // Write file
+    await fs.writeFile(filePath, buffer);
+
+    // Get file size for display
+    const stats = await fs.stat(filePath);
+    const fileSizeMB = (stats.size / 1024 / 1024).toFixed(2);
+
+    console.log(`✅ File saved successfully: ${filename} (${fileSizeMB}MB)`);
+
+    return {
+      success: true,
+      filename: filename,
+      path: filePath,
+      size: `${fileSizeMB} MB`,
+      directory: recordingsDir,
+    };
+  } catch (error) {
+    console.error('❌ Error saving recording:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Handle open recordings folder request
+ipcMain.handle('open-recordings-folder', async () => {
+  console.log('📁 Main: Open recordings folder requested');
+
+  try {
+    const recordingsDir = await ensureRecordingsDirectory();
+
+    // Open the folder in the system file explorer
+    shell.openPath(recordingsDir);
+
+    return { success: true };
+  } catch (error) {
+    console.error('❌ Error opening recordings folder:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Handle get recordings directory request
+ipcMain.handle('get-recordings-directory', async () => {
+  try {
+    const recordingsDir = await ensureRecordingsDirectory();
+    return { success: true, directory: recordingsDir };
+  } catch (error) {
+    console.error('❌ Error getting recordings directory:', error);
+    return { success: false, error: error.message };
+  }
 });
 
 // This method will be called when Electron has finished initialization
