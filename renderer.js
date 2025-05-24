@@ -1,4 +1,4 @@
-// This is the RENDERER PROCESS - Now with quality settings!
+// This is the RENDERER PROCESS - Now with audio support!
 
 console.log('🎨 Renderer process loaded!');
 
@@ -17,6 +17,15 @@ let mediaRecorder = null;
 let recordedChunks = [];
 let recordingStartTime = null;
 let timerInterval = null;
+
+// Audio state management
+let systemAudioEnabled = false;
+let microphoneEnabled = false;
+let selectedMicrophoneId = null;
+let microphoneStream = null;
+let audioContext = null;
+let audioAnalyser = null;
+let audioLevelInterval = null;
 
 // Quality presets
 const QUALITY_PRESETS = {
@@ -65,6 +74,15 @@ const recordingInfo = document.getElementById('recordingInfo');
 const recordingTimer = document.getElementById('recordingTimer');
 const saveLocation = document.getElementById('saveLocation');
 const currentQuality = document.getElementById('currentQuality');
+const audioStatus = document.getElementById('audioStatus');
+
+// Audio DOM elements
+const systemAudioToggle = document.getElementById('systemAudioToggle');
+const microphoneToggle = document.getElementById('microphoneToggle');
+const microphoneSelect = document.getElementById('microphoneSelect');
+const microphoneDropdown = document.getElementById('microphoneDropdown');
+const audioLevels = document.getElementById('audioLevels');
+const audioLevelFill = document.getElementById('audioLevelFill');
 
 // Function to log messages with timestamp
 function log(message, type = 'info') {
@@ -74,6 +92,201 @@ function log(message, type = 'info') {
   logEntry.innerHTML = `[${timestamp}] ${icon} ${message}`;
   logArea.appendChild(logEntry);
   logArea.scrollTop = logArea.scrollHeight; // Auto-scroll to bottom
+}
+
+// Function to update audio status display
+function updateAudioStatus() {
+  const statuses = [];
+  if (systemAudioEnabled) statuses.push('System');
+  if (microphoneEnabled) statuses.push('Microphone');
+
+  if (statuses.length === 0) {
+    audioStatus.textContent = 'No audio';
+  } else {
+    audioStatus.textContent = statuses.join(' + ');
+  }
+}
+
+// Function to enumerate microphones
+async function enumerateMicrophones() {
+  try {
+    // Request microphone permission first
+    await navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        // Stop the stream immediately - we just needed permission
+        stream.getTracks().forEach((track) => track.stop());
+      });
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const microphones = devices.filter(
+      (device) => device.kind === 'audioinput'
+    );
+
+    // Clear current options
+    microphoneDropdown.innerHTML = '';
+
+    if (microphones.length === 0) {
+      microphoneDropdown.innerHTML =
+        '<option value="">No microphones found</option>';
+      return;
+    }
+
+    // Add microphones to dropdown
+    microphones.forEach((mic, index) => {
+      const option = document.createElement('option');
+      option.value = mic.deviceId;
+      option.textContent = mic.label || `Microphone ${index + 1}`;
+      microphoneDropdown.appendChild(option);
+    });
+
+    // Select the first microphone by default
+    if (!selectedMicrophoneId && microphones.length > 0) {
+      selectedMicrophoneId = microphones[0].deviceId;
+      microphoneDropdown.value = selectedMicrophoneId;
+    }
+
+    log(`🎤 Found ${microphones.length} microphone(s)`, 'success');
+  } catch (error) {
+    log(`❌ Error enumerating microphones: ${error.message}`, 'error');
+    microphoneDropdown.innerHTML =
+      '<option value="">Error loading microphones</option>';
+  }
+}
+
+// Function to toggle system audio
+function toggleSystemAudio() {
+  systemAudioEnabled = systemAudioToggle.checked;
+  log(
+    systemAudioEnabled ? '🔊 System audio enabled' : '🔇 System audio disabled'
+  );
+  updateAudioStatus();
+
+  // Note: System audio capture has limitations in Electron
+  if (systemAudioEnabled) {
+    log('⚠️ Note: System audio may not work on all systems', 'warning');
+  }
+}
+
+// Function to toggle microphone
+async function toggleMicrophone() {
+  microphoneEnabled = microphoneToggle.checked;
+  microphoneSelect.classList.toggle('enabled', microphoneEnabled);
+
+  if (microphoneEnabled) {
+    log('🎤 Microphone enabled');
+    await startMicrophonePreview();
+  } else {
+    log('🔇 Microphone disabled');
+    stopMicrophonePreview();
+  }
+
+  updateAudioStatus();
+}
+
+// Function to select microphone
+async function selectMicrophone() {
+  selectedMicrophoneId = microphoneDropdown.value;
+  log(
+    `🎤 Selected microphone: ${
+      microphoneDropdown.options[microphoneDropdown.selectedIndex].text
+    }`
+  );
+
+  // Restart microphone preview with new device
+  if (microphoneEnabled) {
+    stopMicrophonePreview();
+    await startMicrophonePreview();
+  }
+}
+
+// Function to start microphone preview and level monitoring
+async function startMicrophonePreview() {
+  try {
+    // Stop existing microphone stream if any
+    if (microphoneStream) {
+      microphoneStream.getTracks().forEach((track) => track.stop());
+    }
+
+    // Get microphone stream
+    const constraints = {
+      audio: {
+        deviceId: selectedMicrophoneId
+          ? { exact: selectedMicrophoneId }
+          : undefined,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    };
+
+    microphoneStream = await navigator.mediaDevices.getUserMedia(constraints);
+
+    // Set up audio level monitoring
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const source = audioContext.createMediaStreamSource(microphoneStream);
+    audioAnalyser = audioContext.createAnalyser();
+    audioAnalyser.fftSize = 256;
+    source.connect(audioAnalyser);
+
+    // Show audio levels
+    audioLevels.style.display = 'block';
+    startAudioLevelMonitoring();
+
+    log('🎤 Microphone preview started', 'success');
+  } catch (error) {
+    log(`❌ Error starting microphone: ${error.message}`, 'error');
+    microphoneEnabled = false;
+    microphoneToggle.checked = false;
+    updateAudioStatus();
+  }
+}
+
+// Function to stop microphone preview
+function stopMicrophonePreview() {
+  if (microphoneStream) {
+    microphoneStream.getTracks().forEach((track) => track.stop());
+    microphoneStream = null;
+  }
+
+  if (audioContext) {
+    audioContext.close();
+    audioContext = null;
+  }
+
+  stopAudioLevelMonitoring();
+  audioLevels.style.display = 'none';
+}
+
+// Function to start audio level monitoring
+function startAudioLevelMonitoring() {
+  if (!audioAnalyser) return;
+
+  const dataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
+
+  audioLevelInterval = setInterval(() => {
+    audioAnalyser.getByteFrequencyData(dataArray);
+
+    // Calculate average volume
+    let sum = 0;
+    for (let i = 0; i < dataArray.length; i++) {
+      sum += dataArray[i];
+    }
+    const average = sum / dataArray.length;
+    const percentage = (average / 255) * 100;
+
+    // Update level bar
+    audioLevelFill.style.width = `${percentage}%`;
+  }, 100);
+}
+
+// Function to stop audio level monitoring
+function stopAudioLevelMonitoring() {
+  if (audioLevelInterval) {
+    clearInterval(audioLevelInterval);
+    audioLevelInterval = null;
+  }
+  audioLevelFill.style.width = '0%';
 }
 
 // Function to set recording quality
@@ -243,23 +456,34 @@ async function startPreview(sourceId) {
     const quality = QUALITY_PRESETS[selectedQuality];
     log(`🎬 Using quality preset: ${quality.name}`);
 
-    // Get user media with the selected source - WITH QUALITY SETTINGS
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: false, // We'll add audio in next step
-      video: {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: sourceId,
-          // Quality settings based on preset
-          minWidth: quality.width,
-          maxWidth: quality.width,
-          minHeight: quality.height,
-          maxHeight: quality.height,
-          minFrameRate: quality.frameRate,
-          maxFrameRate: quality.frameRate,
-        },
+    // Get user media with the selected source
+    const videoConstraints = {
+      mandatory: {
+        chromeMediaSource: 'desktop',
+        chromeMediaSourceId: sourceId,
+        minWidth: quality.width,
+        maxWidth: quality.width,
+        minHeight: quality.height,
+        maxHeight: quality.height,
+        minFrameRate: quality.frameRate,
+        maxFrameRate: quality.frameRate,
       },
-    });
+    };
+
+    // Create constraints with audio if system audio is enabled
+    const constraints = {
+      audio: systemAudioEnabled
+        ? {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: sourceId,
+            },
+          }
+        : false,
+      video: videoConstraints,
+    };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
 
     // Store the stream for cleanup and recording
     previewStream = stream;
@@ -277,6 +501,12 @@ async function startPreview(sourceId) {
       'success'
     );
 
+    // Log audio status
+    const audioTracks = stream.getAudioTracks();
+    if (audioTracks.length > 0) {
+      log(`🔊 System audio track available`, 'success');
+    }
+
     log('✅ Preview started successfully!', 'success');
   } catch (error) {
     log(`❌ Error starting preview: ${error.message}`, 'error');
@@ -286,6 +516,40 @@ async function startPreview(sourceId) {
     previewVideo.style.display = 'none';
     previewPlaceholder.style.display = 'flex';
     previewPlaceholder.textContent = `Error: ${error.message}`;
+  }
+}
+
+// Function to create combined stream with all audio sources
+function createCombinedStream() {
+  try {
+    // Start with video track from preview
+    const videoTrack = previewStream.getVideoTracks()[0];
+    const tracks = [videoTrack];
+
+    // Add system audio if available
+    if (systemAudioEnabled) {
+      const systemAudioTracks = previewStream.getAudioTracks();
+      if (systemAudioTracks.length > 0) {
+        tracks.push(systemAudioTracks[0]);
+        log('🔊 Added system audio to recording', 'success');
+      }
+    }
+
+    // Add microphone audio if enabled
+    if (microphoneEnabled && microphoneStream) {
+      const micTrack = microphoneStream.getAudioTracks()[0];
+      if (micTrack) {
+        tracks.push(micTrack);
+        log('🎤 Added microphone to recording', 'success');
+      }
+    }
+
+    // Create new MediaStream with all tracks
+    return new MediaStream(tracks);
+  } catch (error) {
+    log(`❌ Error creating combined stream: ${error.message}`, 'error');
+    // Return preview stream as fallback
+    return previewStream;
   }
 }
 
@@ -302,17 +566,19 @@ async function startRecording() {
     // Reset recorded chunks
     recordedChunks = [];
 
-    // Determine best codec and bitrate based on system
+    // Create combined stream with video and all audio sources
+    const recordingStream = createCombinedStream();
+
+    // Determine best codec
     let mimeType;
     const codecs = [
-      'video/webm;codecs=vp9,opus', // Best quality
-      'video/webm;codecs=vp9', // Good quality
-      'video/webm;codecs=vp8,opus', // Fallback
-      'video/webm;codecs=vp8', // Basic fallback
-      'video/webm', // Last resort
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8,opus',
+      'video/webm;codecs=vp8',
+      'video/webm',
     ];
 
-    // Find the first supported codec
     for (const codec of codecs) {
       if (MediaRecorder.isTypeSupported(codec)) {
         mimeType = codec;
@@ -326,10 +592,11 @@ async function startRecording() {
     const recorderOptions = {
       mimeType: mimeType,
       videoBitsPerSecond: quality.bitrate,
+      audioBitsPerSecond: 128000, // 128 kbps for audio
     };
 
     log(`📹 Recording at ${(quality.bitrate / 1000000).toFixed(1)} Mbps`);
-    mediaRecorder = new MediaRecorder(previewStream, recorderOptions);
+    mediaRecorder = new MediaRecorder(recordingStream, recorderOptions);
 
     // Handle data available event
     mediaRecorder.ondataavailable = (event) => {
@@ -350,7 +617,7 @@ async function startRecording() {
       log(`❌ Recording error: ${event.error}`, 'error');
     };
 
-    // Start recording (collect data every 100ms for smoother recording)
+    // Start recording
     mediaRecorder.start(100);
 
     // Update main process state
@@ -476,7 +743,7 @@ function showSaveSuccess(fileInfo) {
   }, 10000);
 }
 
-// OPEN RECORDINGS FOLDER - Open the folder where recordings are saved
+// OPEN RECORDINGS FOLDER
 async function openRecordingsFolder() {
   try {
     log('📁 Opening recordings folder...');
@@ -494,7 +761,7 @@ async function openRecordingsFolder() {
   }
 }
 
-// CHECK STATUS - Query the main process for current state
+// CHECK STATUS
 async function checkStatus() {
   try {
     log('📊 Checking recording status...');
@@ -527,11 +794,18 @@ window.addEventListener('beforeunload', () => {
   if (previewStream) {
     previewStream.getTracks().forEach((track) => track.stop());
   }
+  if (microphoneStream) {
+    microphoneStream.getTracks().forEach((track) => track.stop());
+  }
   if (mediaRecorder && mediaRecorder.state !== 'inactive') {
     mediaRecorder.stop();
   }
   if (timerInterval) {
     clearInterval(timerInterval);
+  }
+  stopAudioLevelMonitoring();
+  if (audioContext) {
+    audioContext.close();
   }
 });
 
@@ -552,6 +826,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (currentQuality) {
     currentQuality.textContent = preset.name;
   }
+
+  // Update audio status
+  updateAudioStatus();
+
+  // Load available microphones
+  await enumerateMicrophones();
+
+  // Listen for device changes
+  navigator.mediaDevices.addEventListener('devicechange', async () => {
+    log('🔄 Audio devices changed, refreshing...');
+    await enumerateMicrophones();
+  });
 
   // Check initial status
   checkStatus();
